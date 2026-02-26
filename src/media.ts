@@ -354,8 +354,7 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio, "media" for video, "file" for documents */
-  msgType?: "file" | "audio" | "media";
+  msgType?: "file" | "media";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
@@ -496,13 +495,12 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "audio" for audio, "media" for video, "file" for documents
-    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    const isMedia = fileType === "mp4" || fileType === "opus";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType,
+      msgType: isMedia ? "media" : "file",
       replyToMessageId,
       accountId,
     });

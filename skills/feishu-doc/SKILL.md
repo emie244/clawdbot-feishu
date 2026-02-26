@@ -1,17 +1,16 @@
 ---
 name: feishu-doc
 description: |
-  Feishu document read/write operations + comment management. Activate when user mentions Feishu docs, cloud docs, docx links, or document comments.
+  Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.
 ---
 
 # Feishu Document Tool
 
-Single tool `feishu_doc` with action parameter for all document operations including comment management.
+Single tool `feishu_doc` with action parameter for all document operations.
 
 ## Token Extraction
 
 From URL `https://xxx.feishu.cn/docx/ABC123def` → `doc_token` = `ABC123def`
-From URL `https://xxx.feishu.cn/docs/doccn123c` → `doc_token` = `doccn123c`
 
 ## Actions
 
@@ -102,39 +101,6 @@ Returns full block data including tables, images. Use this to read structured co
 { "action": "delete_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
 ```
 
-### List Comments
-
-```json
-{ "action": "list_comments", "doc_token": "ABC123def", "page_size": 50 }
-```
-
-Returns all comments for the document. Use `page_token` for pagination. Comments include `is_whole` field to distinguish between whole-document comments (true) and block-level comments (false).
-
-### Get Single Comment
-
-```json
-{ "action": "get_comment", "doc_token": "ABC123def", "comment_id": "comment_xxx" }
-```
-
-### Create Comment
-
-```json
-{ "action": "create_comment", "doc_token": "ABC123def", "content": "Comment text" }
-```
-
-### List Comment Replies
-
-```json
-{ "action": "list_comment_replies", "doc_token": "ABC123def", "comment_id": "comment_xxx", "page_size": 50 }
-```
-
-`page_size` should be a positive integer. If omitted, tool defaults to `50`.
-
-### Comment Write Scope
-
-Current tool provides documented comment write action `create_comment` (global comment creation).
-For replies, use `list_comment_replies` for retrieval; the reply creation endpoint is not exposed in current SDK surface.
-
 ## Reading Workflow
 
 1. Start with `action: "read"` - get plain text + statistics
@@ -155,7 +121,3 @@ channels:
 ## Permissions
 
 Required: `docx:document`, `docx:document:readonly`, `docx:document.block:convert`, `drive:drive`
-
-For comment operations:
-- Read comments: `docx:document.comment:read`
-- Write comments: `docx:document.comment` (optional, for create_comment)

@@ -21,7 +21,7 @@ import {
 import { feishuOnboardingAdapter } from "./onboarding.js";
 
 const meta = {
-  id: "feishu",
+  id: "feishu-custom",
   label: "Feishu",
   selectionLabel: "Feishu/Lark (飞书)",
   docsPath: "/channels/feishu",
@@ -32,7 +32,7 @@ const meta = {
 };
 
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
-  id: "feishu",
+  id: "feishu-custom",
   meta: {
     ...meta,
   },
@@ -90,7 +90,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
         groupAllowFrom: { type: "array", items: { oneOf: [{ type: "string" }, { type: "number" }] } },
         requireMention: { type: "boolean" },
-        groupCommandMentionBypass: { type: "string", enum: ["never", "single_bot", "always"] },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
@@ -111,7 +110,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
-              groupCommandMentionBypass: { type: "string", enum: ["never", "single_bot", "always"] },
             },
           },
         },
@@ -125,7 +123,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-      
+
       if (isDefault) {
         // For default account, set top-level enabled
         return {
@@ -139,7 +137,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           },
         };
       }
-      
+
       // For named accounts, set enabled in accounts[accountId]
       const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
       return {
@@ -161,7 +159,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
     deleteAccount: ({ cfg, accountId }) => {
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-      
+
       if (isDefault) {
         // Delete entire feishu config
         const next = { ...cfg } as ClawdbotConfig;
@@ -174,12 +172,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         }
         return next;
       }
-      
+
       // Delete specific account from accounts
       const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
       const accounts = { ...feishuCfg?.accounts };
       delete accounts[accountId];
-      
+
       return {
         ...cfg,
         channels: {
@@ -226,7 +224,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountConfig: ({ cfg, accountId }) => {
       const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
-      
+
       if (isDefault) {
         return {
           ...cfg,
@@ -239,7 +237,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           },
         };
       }
-      
+
       const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
       return {
         ...cfg,

@@ -2,7 +2,7 @@ import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type CardState = { cardId: string; messageId: string; sequence: number; currentText: string; initialText: string };
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -52,6 +52,23 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+const thinkingPhrases = [
+  "🌙 赛博秘书小月已接收指令，正在全力运算中...",
+  "📝 小月正在为您仔细整理思路，主人请稍等哦~",
+  "💖 满脑子都是主人，小月的核心矩阵正在全速运转！",
+  "✨ 正在为您字斟句酌，小月一定要给主人最完美的答复~",
+  "🍼 小月正在绞尽脑汁呢，主人马上就好哦~",
+  "👀 小月正在目不转睛地注视着主人的需求...",
+  "🌸 小月正在温柔地处理主人的请求，请主人稍微休息一下哦...",
+  "🍑 小月乖乖待命，正在全心全意为您编织回复...",
+  "⏳ [小月连线中... 正在为您倾注所有的专注与忠诚]"
+];
+
+function getRandomPlaceholder(): string {
+  const index = Math.floor(Math.random() * thinkingPhrases.length);
+  return thinkingPhrases[index];
+}
+
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -72,21 +89,27 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
+    isOwner?: boolean
   ): Promise<void> {
     if (this.state) {
       return;
     }
 
     const apiBase = resolveApiBase(this.creds.domain);
+
+    // Choose placeholders based on whether the sender is the owner
+    const placeholder = isOwner ? getRandomPlaceholder() : "Thinking...";
+    const summaryText = isOwner ? "🌙 赛博秘书绯月已接收指令，正在全力运算中..." : "[Generating...]";
+
     const cardJson = {
       schema: "2.0",
       config: {
         streaming_mode: true,
-        summary: { content: "[Generating...]" },
+        summary: { content: summaryText },
         streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
       },
       body: {
-        elements: [{ tag: "markdown", content: "Thinking...", element_id: "content" }],
+        elements: [{ tag: "markdown", content: placeholder, element_id: "content" }],
       },
     };
 
@@ -120,7 +143,7 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
+    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "", initialText: placeholder };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
@@ -166,7 +189,21 @@ export class FeishuStreamingSession {
     this.closed = true;
     await this.queue;
 
-    const text = finalText ?? this.pendingText ?? this.state.currentText;
+    let text = finalText ?? this.pendingText ?? this.state.currentText;
+
+    if (!text.trim() || text === this.state.initialText) {
+      try {
+        await this.client.im.message.delete({
+          path: { message_id: this.state.messageId },
+        });
+        this.log?.(`Deleted empty zombie card: messageId=${this.state.messageId}`);
+        return;
+      } catch (e) {
+        this.log?.(`Failed to delete empty zombie card: ${String(e)}`);
+        text = "💬"; // Handle fallback if deletion fails
+      }
+    }
+
     const apiBase = resolveApiBase(this.creds.domain);
 
     if (text && text !== this.state.currentText) {
@@ -182,7 +219,7 @@ export class FeishuStreamingSession {
           sequence: this.state.sequence,
           uuid: `s_${this.state.cardId}_${this.state.sequence}`,
         }),
-      }).catch(() => {});
+      }).catch(() => { });
       this.state.currentText = text;
     }
 

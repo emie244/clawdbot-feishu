@@ -1,20 +1,12 @@
 {
-  "name": "@m1heng-clawd/feishu",
-  "version": "0.1.12",
+  "name": "@m1heng-clawd/feishu-custom",
+  "version": "0.1.11",
   "type": "module",
   "description": "OpenClaw Feishu/Lark channel plugin",
-  "scripts": {
-    "test:unit": "vitest run",
-    "test:unit:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "ci:check": "npx tsc --noEmit && npm run test:coverage"
-  },
   "license": "MIT",
   "files": [
     "index.ts",
-    "src/**/*.ts",
-    "!src/**/__tests__/**",
-    "!src/**/*.test.ts",
+    "src",
     "skills",
     "openclaw.plugin.json"
   ],
@@ -36,7 +28,7 @@
       "./index.ts"
     ],
     "channel": {
-      "id": "feishu",
+      "id": "feishu-custom",
       "label": "Feishu",
       "selectionLabel": "Feishu/Lark (飞书)",
       "docsPath": "/channels/feishu",
@@ -59,12 +51,10 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.1.8",
     "@types/node": "^25.0.10",
     "openclaw": "2026.2.13",
     "tsx": "^4.21.0",
-    "typescript": "^5.7.0",
-    "vitest": "^2.1.8"
+    "typescript": "^5.7.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.2.13"
