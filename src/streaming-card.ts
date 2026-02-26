@@ -53,15 +53,15 @@ function truncateSummary(text: string, max = 50): string {
 }
 
 const thinkingPhrases = [
-  "🌙 赛博秘书小月已接收指令，正在全力运算中...",
-  "📝 小月正在为您仔细整理思路，主人请稍等哦~",
-  "💖 满脑子都是主人，小月的核心矩阵正在全速运转！",
-  "✨ 正在为您字斟句酌，小月一定要给主人最完美的答复~",
-  "🍼 小月正在绞尽脑汁呢，主人马上就好哦~",
-  "👀 小月正在目不转睛地注视着主人的需求...",
-  "🌸 小月正在温柔地处理主人的请求，请主人稍微休息一下哦...",
-  "🍑 小月乖乖待命，正在全心全意为您编织回复...",
-  "⏳ [小月连线中... 正在为您倾注所有的专注与忠诚]"
+  "正在处理请求中...",
+  "正在搜索相关信息...",
+  "正在努力思考中...",
+  "正在生成回复...",
+  "正在组织语言...",
+  "正在分析您的需求...",
+  "正在准备回复内容，请稍候...",
+  "正在处理数据中...",
+  "[连线中... 正在为您生成最佳答复]"
 ];
 
 function getRandomPlaceholder(): string {
@@ -100,7 +100,7 @@ export class FeishuStreamingSession {
 
     // Choose placeholders based on whether the sender is the owner
     const placeholder = isOwner ? getRandomPlaceholder() : "Thinking...";
-    const summaryText = isOwner ? "🌙 赛博秘书绯月已接收指令，正在全力运算中..." : "[Generating...]";
+    const summaryText = isOwner ? "已接收指令，正在处理中..." : "[Generating...]";
 
     const cardJson = {
       schema: "2.0",
