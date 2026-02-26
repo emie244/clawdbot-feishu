@@ -469,10 +469,30 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
-      maxBytes: mediaMaxBytes,
-      optimizeImages: false,
-    });
+    const mediaLocalRoots = (account.config?.mediaLocalRoots ?? [])
+      .map((root) => root.trim())
+      .filter((root) => root.length > 0);
+    const loaded = await (async () => {
+      try {
+        return await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+          maxBytes: mediaMaxBytes,
+          optimizeImages: false,
+        });
+      } catch (err) {
+        const shouldRetryWithCustomRoots =
+          mediaLocalRoots.length > 0 &&
+          err instanceof Error &&
+          err.message.includes("Local media path is not under an allowed directory");
+        if (!shouldRetryWithCustomRoots) {
+          throw err;
+        }
+        return await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+          maxBytes: mediaMaxBytes,
+          optimizeImages: false,
+          localRoots: mediaLocalRoots,
+        });
+      }
+    })();
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
   } else {

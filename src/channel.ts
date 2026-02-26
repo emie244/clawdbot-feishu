@@ -96,6 +96,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         textChunkLimit: { type: "integer", minimum: 1 },
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
+        mediaLocalRoots: { type: "array", items: { type: "string" } },
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
         accounts: {
           type: "object",
@@ -110,6 +111,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+              mediaLocalRoots: { type: "array", items: { type: "string" } },
+              groupCommandMentionBypass: { type: "string", enum: ["never", "single_bot", "always"] },
             },
           },
         },
