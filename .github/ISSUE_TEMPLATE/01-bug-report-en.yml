@@ -43,7 +43,7 @@ body:
     attributes:
       label: Feishu Plugin Version
       description: "Example: output from `openclaw plugins list`"
-      placeholder: "e.g. @m1heng-clawd/feishu 0.1.3"
+      placeholder: "e.g. @m1heng-clawd/feishu <installed-version>"
     validations:
       required: true
 

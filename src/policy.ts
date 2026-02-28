@@ -1,6 +1,8 @@
 import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
+export type FeishuGroupCommandMentionBypass = "never" | "single_bot" | "always";
+
 export type FeishuAllowlistMatch = {
   allowed: boolean;
   matchKey?: string;
@@ -80,13 +82,28 @@ export function resolveFeishuReplyPolicy(params: {
   isDirectMessage: boolean;
   globalConfig?: FeishuConfig;
   groupConfig?: FeishuGroupConfig;
-}): { requireMention: boolean } {
+}): { requireMention: boolean; allowMentionlessInMultiBotGroup: boolean } {
   if (params.isDirectMessage) {
-    return { requireMention: false };
+    return { requireMention: false, allowMentionlessInMultiBotGroup: false };
   }
 
   const requireMention =
     params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
+  const allowMentionlessInMultiBotGroup =
+    params.groupConfig?.allowMentionlessInMultiBotGroup ??
+    params.globalConfig?.allowMentionlessInMultiBotGroup ??
+    false;
 
-  return { requireMention };
+  return { requireMention, allowMentionlessInMultiBotGroup };
+}
+
+export function resolveFeishuGroupCommandMentionBypass(params: {
+  globalConfig?: FeishuConfig;
+  groupConfig?: FeishuGroupConfig;
+}): FeishuGroupCommandMentionBypass {
+  return (
+    params.groupConfig?.groupCommandMentionBypass ??
+    params.globalConfig?.groupCommandMentionBypass ??
+    "single_bot"
+  );
 }

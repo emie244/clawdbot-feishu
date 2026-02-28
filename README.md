@@ -21,20 +21,45 @@ openclaw plugins install @m1heng-clawd/feishu
 > [!IMPORTANT]
 > **Windows Troubleshooting (`spawn npm ENOENT`)**
 >
-> If `openclaw plugins install` fails, install manually:
+> If `openclaw plugins install` fails, install manually with the latest tarball:
 >
 > ```bash
-> # 1. Download the package
-> curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
+> # Option A (recommended): download latest package tarball
+> npm pack @m1heng-clawd/feishu
+> openclaw plugins install ./m1heng-clawd-feishu-<version>.tgz
+> ```
 >
-> # 2. Install from local file
-> openclaw plugins install ./feishu-0.1.3.tgz
+> ```bash
+> # Option B (keep curl flow): resolve latest tarball URL, then download/install
+> TARBALL_URL="$(npm view @m1heng-clawd/feishu dist.tarball)"
+> curl -L -o feishu-latest.tgz "$TARBALL_URL"
+> openclaw plugins install ./feishu-latest.tgz
+> ```
+>
+> ```powershell
+> # Windows PowerShell (Option B)
+> $tarball = npm view @m1heng-clawd/feishu dist.tarball
+> curl.exe -L $tarball -o feishu-latest.tgz
+> openclaw plugins install .\feishu-latest.tgz
+> ```
+>
+> ```bash
+> # Option C (no npm command): use URL template with latest version from npm Versions tab
+> # https://www.npmjs.com/package/@m1heng-clawd/feishu?activeTab=versions
+> curl -L -o feishu-latest.tgz https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-<version>.tgz
+> openclaw plugins install ./feishu-latest.tgz
 > ```
 
 ### Upgrade
 
 ```bash
 openclaw plugins update feishu
+```
+
+Check installed version:
+
+```bash
+openclaw plugins list | rg -i feishu
 ```
 
 ### Configuration
@@ -60,7 +85,7 @@ openclaw plugins update feishu
 | Permission | Scope | Description |
 |------------|-------|-------------|
 | `contact:user.base:readonly` | User info | Get basic user info (required to resolve sender display names for speaker attribution) |
-| `im:message.group_msg` | Group | Read all group messages (sensitive) |
+| `im:message.group_msg` | Group | Read all group messages (sensitive). Required when you want `requireMention: false` to work for non-@ group messages |
 | `im:message:readonly` | Read | Get message history |
 | `im:message:update` | Edit | Update/edit sent messages |
 | `im:message:recall` | Recall | Recall sent messages |
@@ -174,6 +199,14 @@ channels:
     groupPolicy: "allowlist"
     # Require @mention in groups
     requireMention: true
+    # Safety default for mention-free mode (`requireMention: false`):
+    # only allow non-@ messages in groups with <= 1 bot.
+    # Set true to also allow mention-free messages in multi-bot groups.
+    allowMentionlessInMultiBotGroup: false
+    # Group command mention bypass: "never" | "single_bot" | "always"
+    # Default "single_bot": allow authorized command-only messages without @
+    # only when the group has a single bot.
+    groupCommandMentionBypass: "single_bot"
     # Max media size in MB (default: 30)
     mediaMaxMb: 30
     # Render mode for bot replies: "auto" | "raw" | "card"
@@ -254,6 +287,34 @@ Top-level `channels.feishu.dmPolicy` / `channels.feishu.allowFrom` are fallback 
 
 > `dmPolicy` only controls who can trigger the bot.  
 > To actually read/write docs or files, you still need: (1) correct Feishu app scopes, and (2) sharing the target resources (Drive/Wiki/Bitable) with the bot.
+
+#### Group Command Mention Bypass
+
+When `requireMention: true`, Feishu can still allow authorized control commands (such as `/new`) without `@bot`.
+
+| `groupCommandMentionBypass` | Behavior |
+|----------------------------|----------|
+| `never` | Never bypass `@` requirement for group commands. |
+| `single_bot` | Bypass only when the group contains at most one bot (default). |
+| `always` | Always allow authorized control commands to bypass mention gating. |
+
+Notes:
+- Bypass only applies to authorized control commands in group chats.
+- If any user is explicitly `@`-mentioned in the same message, bypass is disabled.
+- In DMs, this setting does not apply.
+
+#### Group Mention-Free Behavior (`requireMention: false`)
+
+When `requireMention: false`, non-@ group messages are handled with a safety default:
+
+| `allowMentionlessInMultiBotGroup` | Behavior for non-@ group messages |
+|-----------------------------------|-----------------------------------|
+| `false` (default) | Only accepted when the group has at most one bot. In multi-bot groups, explicit `@bot` is still required. |
+| `true` | Accepted even in multi-bot groups (use only if you accept duplicate-trigger risk). |
+
+Important:
+- `im:message.group_msg` is required for receiving non-@ group messages and this is a **sensitive permission** in Feishu.
+- If this scope is not approved, Feishu usually only delivers `@bot` group messages (`im:message.group_at_msg:readonly`).
 
 #### Connection Mode
 
@@ -384,6 +445,13 @@ Check the following:
 4. Are the permissions approved?
 5. For webhook mode: is your server running and the URL publicly accessible?
 
+#### `requireMention: false` but group still needs @
+
+Check the following:
+1. Is `im:message.group_msg` approved? (sensitive permission, required for non-@ group messages)
+2. If the group has multiple bots, do you explicitly set `allowMentionlessInMultiBotGroup: true`?
+3. Is `requireMention: false` configured on the effective account/group?
+
 #### 403 error when sending messages
 
 Ensure `im:message:send_as_bot` permission is approved.
@@ -415,20 +483,45 @@ openclaw plugins install @m1heng-clawd/feishu
 > [!IMPORTANT]
 > **Windows 排错（`spawn npm ENOENT`）**
 >
-> 如果 `openclaw plugins install` 失败，可以手动安装：
+> 如果 `openclaw plugins install` 失败，可通过最新 tarball 手动安装：
 >
 > ```bash
-> # 1. 下载插件包
-> curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
+> # 方案 A（推荐）：下载最新插件 tarball
+> npm pack @m1heng-clawd/feishu
+> openclaw plugins install ./m1heng-clawd-feishu-<version>.tgz
+> ```
 >
-> # 2. 从本地安装
-> openclaw plugins install ./feishu-0.1.3.tgz
+> ```bash
+> # 方案 B（保留 curl 路径）：先解析最新 tarball 地址，再下载安装
+> TARBALL_URL="$(npm view @m1heng-clawd/feishu dist.tarball)"
+> curl -L -o feishu-latest.tgz "$TARBALL_URL"
+> openclaw plugins install ./feishu-latest.tgz
+> ```
+>
+> ```powershell
+> # Windows PowerShell（方案 B）
+> $tarball = npm view @m1heng-clawd/feishu dist.tarball
+> curl.exe -L $tarball -o feishu-latest.tgz
+> openclaw plugins install .\feishu-latest.tgz
+> ```
+>
+> ```bash
+> # 方案 C（无 npm 命令）：先在 npm Versions 页查到最新版本号，再套用 URL 模板
+> # https://www.npmjs.com/package/@m1heng-clawd/feishu?activeTab=versions
+> curl -L -o feishu-latest.tgz https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-<version>.tgz
+> openclaw plugins install ./feishu-latest.tgz
 > ```
 
 ### 升级
 
 ```bash
 openclaw plugins update feishu
+```
+
+查看已安装版本：
+
+```bash
+openclaw plugins list | rg -i feishu
 ```
 
 ### 配置
@@ -454,7 +547,7 @@ openclaw plugins update feishu
 | 权限 | 范围 | 说明 |
 |------|------|------|
 | `contact:user.base:readonly` | 用户信息 | 获取用户基本信息（用于解析发送者姓名，避免群聊/私聊把不同人当成同一说话者） |
-| `im:message.group_msg` | 群聊 | 读取所有群消息（敏感） |
+| `im:message.group_msg` | 群聊 | 读取所有群消息（敏感权限）。当你希望 `requireMention: false` 对“未 @ 的群消息”生效时必需 |
 | `im:message:readonly` | 读取 | 获取历史消息 |
 | `im:message:update` | 编辑 | 更新/编辑已发送消息 |
 | `im:message:recall` | 撤回 | 撤回已发送消息 |
@@ -568,6 +661,13 @@ channels:
     groupPolicy: "allowlist"
     # 群聊是否需要 @机器人
     requireMention: true
+    # 免 @ 安全默认策略（requireMention=false 时）：
+    # 仅在群内机器人数量 <= 1 时处理未 @ 的群消息。
+    # 设为 true 可在多 bot 群也放开免 @（需自行承担重复触发风险）。
+    allowMentionlessInMultiBotGroup: false
+    # 群聊命令绕过 @ 策略: "never" | "single_bot" | "always"
+    # 默认 "single_bot"：仅当群内机器人数量 <= 1 时，允许已授权命令免 @
+    groupCommandMentionBypass: "single_bot"
     # 媒体文件最大大小 (MB, 默认 30)
     mediaMaxMb: 30
     # 回复渲染模式: "auto" | "raw" | "card"
@@ -648,6 +748,34 @@ channels:
 
 > `dmPolicy` 只控制“是否允许触发机器人”。  
 > 真正执行文档/云盘/知识库/多维表格操作，还需要两层权限：1）应用 API 权限（scopes）；2）把目标资源分享给机器人。
+
+#### 群聊命令免 @ 策略
+
+当 `requireMention: true` 时，Feishu 仍可让“已授权控制命令（如 `/new`）”在不 `@bot` 的情况下通过。
+
+| `groupCommandMentionBypass` | 行为 |
+|----------------------------|------|
+| `never` | 群聊命令永不绕过 `@` 校验。 |
+| `single_bot` | 仅当群内机器人数量不超过 1 个时才允许绕过（默认）。 |
+| `always` | 已授权控制命令始终可绕过 `@` 校验。 |
+
+说明：
+- 仅对群聊中的“已授权控制命令”生效。
+- 同一条消息里如果显式 `@` 了任意用户，则不会触发命令免 `@`。
+- 私聊场景不受该配置影响。
+
+#### 群聊免 @ 行为（`requireMention: false`）
+
+当 `requireMention: false` 时，插件对“未 @ 的群消息”采用安全默认策略：
+
+| `allowMentionlessInMultiBotGroup` | 未 @ 群消息行为 |
+|-----------------------------------|----------------|
+| `false`（默认） | 仅当群里机器人数量不超过 1 个时处理；多 bot 群仍要求显式 `@bot`。 |
+| `true` | 即使在多 bot 群也处理未 @ 消息（仅建议在可接受重复触发风险时启用）。 |
+
+重要说明：
+- 要接收未 @ 的群消息，必须申请并通过 `im:message.group_msg`，且该权限是飞书**敏感权限**。
+- 若未通过该权限，飞书通常只会推送 `@bot` 群消息（`im:message.group_at_msg:readonly`）。
 
 #### 连接模式
 
@@ -777,6 +905,13 @@ session:
 3. 是否添加了 `im.message.receive_v1` 事件？
 4. 相关权限是否已申请并审核通过？
 5. 如果使用 webhook 模式：服务是否正在运行？URL 是否公网可访问？
+
+#### 已配置 `requireMention: false`，群里仍然必须 @
+
+请重点检查：
+1. 是否已申请并审核通过 `im:message.group_msg`（敏感权限，接收未 @ 群消息必需）
+2. 群里若有多个 bot，是否显式设置了 `allowMentionlessInMultiBotGroup: true`
+3. `requireMention: false` 是否配置在当前生效的账号/群配置上
 
 #### 返回消息时 403 错误
 

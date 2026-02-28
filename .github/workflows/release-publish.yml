@@ -172,8 +172,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NOTES="$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)')"
-          if [[ -n "${NOTES}" ]]; then
+          TAG_OBJECT_TYPE="$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(objecttype)')"
+          NOTES=""
+          # Only annotated tags (object type "tag") should provide release notes.
+          # Lightweight tags point directly to commits; %(contents) would return commit messages.
+          if [[ "${TAG_OBJECT_TYPE}" == "tag" ]]; then
+            NOTES="$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)')"
+          fi
+
+          if [[ -n "${NOTES//[[:space:]]/}" ]]; then
             echo "has_notes=true" >> "$GITHUB_OUTPUT"
             {
               echo "notes<<EOF"

@@ -36,6 +36,7 @@ export type FeishuMessageContext = {
   parentId?: string;
   content: string;
   contentType: string;
+  hasAnyMention?: boolean;
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
   /** Extracted message body (after removing @ placeholders) */

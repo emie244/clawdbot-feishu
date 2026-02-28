@@ -4,6 +4,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  resolveMentionGatingWithBypass,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
@@ -16,6 +17,7 @@ import {
   resolveFeishuReplyPolicy,
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
+  resolveFeishuGroupCommandMentionBypass,
 } from "./policy.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
@@ -97,6 +99,137 @@ type SenderNameResult = {
   permissionError?: PermissionError;
 };
 
+type FeishuPairingApiMode = "legacy" | "scoped";
+let detectedFeishuPairingApiMode: FeishuPairingApiMode | null = null;
+
+async function resolveFeishuPairingApiMode(params: {
+  readAllowFromStore: (...args: any[]) => Promise<Array<string | number>>;
+}): Promise<FeishuPairingApiMode> {
+  if (detectedFeishuPairingApiMode) return detectedFeishuPairingApiMode;
+
+  let channelObserved = false;
+  const probe = new Proxy<Record<PropertyKey, unknown>>(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === "channel") {
+          channelObserved = true;
+          return "__feishu_pairing_probe__";
+        }
+        if (prop === "accountId") return "__feishu_pairing_probe__";
+        if (prop === "env") return undefined;
+        if (prop === Symbol.toPrimitive) return () => "__feishu_pairing_probe__";
+        if (prop === "toString") return () => "__feishu_pairing_probe__";
+        return undefined;
+      },
+      has(_target, prop) {
+        if (prop === "channel") {
+          channelObserved = true;
+          return true;
+        }
+        return false;
+      },
+    },
+  );
+
+  try {
+    // Probe once to detect whether runtime reads object-style params (scoped API)
+    // or positional params (legacy API).
+    await params.readAllowFromStore(probe as any, undefined, "__feishu_pairing_probe__");
+  } catch {
+    // Ignore probe errors; fallback below still keeps behavior safe.
+  }
+
+  detectedFeishuPairingApiMode = channelObserved ? "scoped" : "legacy";
+  return detectedFeishuPairingApiMode;
+}
+
+async function readFeishuPairingAllowFrom(params: {
+  core: ReturnType<typeof getFeishuRuntime>;
+  accountId: string;
+}): Promise<Array<string | number>> {
+  const pairing = params.core.channel.pairing as {
+    readAllowFromStore: (...args: any[]) => Promise<Array<string | number>>;
+  };
+  const pairingMode = await resolveFeishuPairingApiMode({
+    readAllowFromStore: pairing.readAllowFromStore,
+  });
+
+  if (pairingMode === "scoped") {
+    try {
+      return await pairing.readAllowFromStore({
+        channel: "feishu",
+        accountId: params.accountId,
+      });
+    } catch {
+      // Compatibility fallback for older OpenClaw implementations.
+      return await pairing.readAllowFromStore("feishu", undefined, params.accountId);
+    }
+  }
+
+  try {
+    // OpenClaw <= 2026.2.19 signature: readAllowFromStore(channel, env?, accountId?)
+    return await pairing.readAllowFromStore("feishu", undefined, params.accountId);
+  } catch {
+    // Compatibility fallback for newer OpenClaw implementations.
+    return await pairing.readAllowFromStore({
+      channel: "feishu",
+      accountId: params.accountId,
+    });
+  }
+}
+
+async function upsertFeishuPairingRequest(params: {
+  core: ReturnType<typeof getFeishuRuntime>;
+  accountId: string;
+  senderId: string;
+  senderName?: string;
+}): Promise<{ code: string; created: boolean }> {
+  const pairing = params.core.channel.pairing as {
+    upsertPairingRequest: (...args: any[]) => Promise<{ code: string; created: boolean }>;
+  };
+  const meta = params.senderName ? { name: params.senderName } : undefined;
+  const pairingMode = await resolveFeishuPairingApiMode({
+    readAllowFromStore: params.core.channel.pairing.readAllowFromStore as (...args: any[]) => Promise<
+      Array<string | number>
+    >,
+  });
+
+  if (pairingMode === "scoped") {
+    try {
+      return await pairing.upsertPairingRequest({
+        channel: "feishu",
+        id: params.senderId,
+        accountId: params.accountId,
+        meta,
+      });
+    } catch {
+      // Compatibility fallback for older OpenClaw implementations.
+      return await pairing.upsertPairingRequest({
+        channel: "feishu",
+        id: params.senderId,
+        meta,
+      });
+    }
+  }
+
+  try {
+    return await pairing.upsertPairingRequest({
+      channel: "feishu",
+      id: params.senderId,
+      meta,
+    });
+  } catch {
+    // Compatibility fallback for newer OpenClaw implementations.
+    return await pairing.upsertPairingRequest({
+      channel: "feishu",
+      id: params.senderId,
+      accountId: params.accountId,
+      meta,
+    });
+  }
+}
+
 async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
   senderOpenId: string;
@@ -145,6 +278,40 @@ async function resolveFeishuSenderName(params: {
   }
 }
 
+// Cache group bot counts for command mention bypass policy checks.
+const GROUP_BOT_COUNT_TTL_MS = 10 * 60 * 1000;
+const groupBotCountCache = new Map<string, { count: number; expireAt: number }>();
+
+async function resolveFeishuGroupBotCount(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  log: (...args: any[]) => void;
+}): Promise<number | undefined> {
+  const { account, chatId, log } = params;
+  if (!account.configured || !chatId) return undefined;
+
+  const cacheKey = `${account.accountId}:${chatId}`;
+  const now = Date.now();
+  const cached = groupBotCountCache.get(cacheKey);
+  if (cached && cached.expireAt > now) return cached.count;
+
+  try {
+    const client = createFeishuClient(account);
+    const res: any = await client.im.chat.get({
+      path: { chat_id: chatId },
+    });
+    const parsed = Number.parseInt(String(res?.data?.bot_count ?? ""), 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      groupBotCountCache.set(cacheKey, { count: parsed, expireAt: now + GROUP_BOT_COUNT_TTL_MS });
+      return parsed;
+    }
+    return undefined;
+  } catch (err) {
+    log(`feishu[${account.accountId}]: failed to resolve bot_count for ${chatId}: ${String(err)}`);
+    return undefined;
+  }
+}
+
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -190,13 +357,17 @@ export type FeishuBotAddedEvent = {
 function parseMessageContent(content: string, messageType: string): string {
   try {
     const parsed = JSON.parse(content);
-    if (messageType === "text") {
+    const normalizedMessageType = normalizeFeishuInboundMessageType(messageType);
+    if (normalizedMessageType === "text") {
       return parsed.text || "";
     }
-    if (messageType === "post") {
+    if (normalizedMessageType === "post") {
       // Extract text content from rich text post
       const { textContent } = parsePostContent(content);
       return textContent;
+    }
+    if (["image", "file", "audio", "video", "sticker"].includes(normalizedMessageType)) {
+      return inferPlaceholder(normalizedMessageType);
     }
     return content;
   } catch {
@@ -204,7 +375,38 @@ function parseMessageContent(content: string, messageType: string): string {
   }
 }
 
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
+/**
+ * Feishu may use "media" for inbound video messages.
+ * Normalize to "video" so downstream media handling is consistent.
+ */
+export function normalizeFeishuInboundMessageType(messageType: string): string {
+  return messageType === "media" ? "video" : messageType;
+}
+
+/**
+ * Select the correct resource key for messageResource download.
+ * - image message: prefer image_key
+ * - other media (video/audio/file/sticker): prefer file_key
+ */
+export function selectFeishuMessageResourceKey(
+  messageType: string,
+  keys: { imageKey?: string; fileKey?: string },
+): string | undefined {
+  const normalized = normalizeFeishuInboundMessageType(messageType);
+  if (normalized === "image") {
+    return keys.imageKey ?? keys.fileKey;
+  }
+  return keys.fileKey ?? keys.imageKey;
+}
+
+function checkBotMentioned(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  postMentionIds: string[] = [],
+): boolean {
+  const normalizedBotOpenId = botOpenId?.trim();
+  // Keep explicit bot mention semantics: without a resolved botOpenId, do not trigger.
+  if (!normalizedBotOpenId) return false;
   const mentions = event.message.mentions ?? [];
   if (mentions.length === 0) return false;
   // Keep explicit bot mention semantics: without a resolved botOpenId, do not trigger.
@@ -243,6 +445,7 @@ function parseMediaKeys(
       case "audio":
         return { fileKey: parsed.file_key };
       case "video":
+      case "media":
         // Video has both file_key (video) and image_key (thumbnail)
         return { fileKey: parsed.file_key, imageKey: parsed.image_key };
       case "sticker":
@@ -262,6 +465,7 @@ function parseMediaKeys(
 function parsePostContent(content: string): {
   textContent: string;
   imageKeys: string[];
+  mentionIds: string[];
 } {
   try {
     const parsed = JSON.parse(content);
@@ -269,6 +473,7 @@ function parsePostContent(content: string): {
     const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
+    const mentionIds: string[] = [];
 
     for (const paragraph of contentBlocks) {
       if (Array.isArray(paragraph)) {
@@ -280,7 +485,11 @@ function parsePostContent(content: string): {
             textContent += element.text || element.href || "";
           } else if (element.tag === "at") {
             // Mention: @username
-            textContent += `@${element.user_name || element.user_id || ""}`;
+            const mentionId =
+              String(element.open_id ?? element.user_id ?? element.union_id ?? "").trim() ||
+              undefined;
+            if (mentionId) mentionIds.push(mentionId);
+            textContent += `@${element.user_name || mentionId || ""}`;
           } else if (element.tag === "img" && element.image_key) {
             // Embedded image
             imageKeys.push(element.image_key);
@@ -293,9 +502,10 @@ function parsePostContent(content: string): {
     return {
       textContent: textContent.trim() || "[富文本消息]",
       imageKeys,
+      mentionIds,
     };
   } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
+    return { textContent: "[富文本消息]", imageKeys: [], mentionIds: [] };
   }
 }
 
@@ -311,6 +521,7 @@ function inferPlaceholder(messageType: string): string {
     case "audio":
       return "<media:audio>";
     case "video":
+    case "media":
       return "<media:video>";
     case "sticker":
       return "<media:sticker>";
@@ -333,10 +544,11 @@ async function resolveFeishuMediaList(params: {
   accountId?: string;
 }): Promise<FeishuMediaInfo[]> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
+  const normalizedMessageType = normalizeFeishuInboundMessageType(messageType);
 
   // Only process media message types (including post for embedded images)
   const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
-  if (!mediaTypes.includes(messageType)) {
+  if (!mediaTypes.includes(normalizedMessageType)) {
     return [];
   }
 
@@ -344,7 +556,7 @@ async function resolveFeishuMediaList(params: {
   const core = getFeishuRuntime();
 
   // Handle post (rich text) messages with embedded images
-  if (messageType === "post") {
+  if (normalizedMessageType === "post") {
     const { imageKeys } = parsePostContent(content);
     if (imageKeys.length === 0) {
       return [];
@@ -391,7 +603,7 @@ async function resolveFeishuMediaList(params: {
   }
 
   // Handle other media types
-  const mediaKeys = parseMediaKeys(content, messageType);
+  const mediaKeys = parseMediaKeys(content, normalizedMessageType);
   if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
     return [];
   }
@@ -403,12 +615,12 @@ async function resolveFeishuMediaList(params: {
 
     // For message media, always use messageResource API
     // The image.get API is only for images uploaded via im/v1/images, not for message attachments
-    const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
+    const fileKey = selectFeishuMessageResourceKey(normalizedMessageType, mediaKeys);
     if (!fileKey) {
       return [];
     }
 
-    const resourceType = messageType === "image" ? "image" : "file";
+    const resourceType = normalizedMessageType === "image" ? "image" : "file";
     const result = await downloadMessageResourceFeishu({
       cfg,
       messageId,
@@ -437,12 +649,12 @@ async function resolveFeishuMediaList(params: {
     out.push({
       path: saved.path,
       contentType: saved.contentType,
-      placeholder: inferPlaceholder(messageType),
+      placeholder: inferPlaceholder(normalizedMessageType),
     });
 
-    log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
+    log?.(`feishu: downloaded ${normalizedMessageType} media, saved to ${saved.path}`);
   } catch (err) {
-    log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
+    log?.(`feishu: failed to download ${normalizedMessageType} media: ${String(err)}`);
   }
 
   return out;
@@ -475,12 +687,43 @@ function buildFeishuMediaPayload(
   };
 }
 
+function skipGroupMessageForMentionGate(params: {
+  accountId: string;
+  chatId: string;
+  senderOpenId: string;
+  senderName?: string;
+  content: string;
+  messageId: string;
+  historyLimit: number;
+  chatHistories?: Map<string, HistoryEntry[]>;
+  log: (...args: any[]) => void;
+}): void {
+  params.log(`feishu[${params.accountId}]: message in group ${params.chatId} skipped (mention required)`);
+  if (params.chatHistories) {
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.chatHistories,
+      historyKey: params.chatId,
+      limit: params.historyLimit,
+      entry: {
+        sender: params.senderOpenId,
+        body: `${params.senderName ?? params.senderOpenId}: ${params.content}`,
+        timestamp: Date.now(),
+        messageId: params.messageId,
+      },
+    });
+  }
+}
+
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
 ): FeishuMessageContext {
+  const parsedPost =
+    event.message.message_type === "post" ? parsePostContent(event.message.content) : undefined;
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
+  const mentionedBot = checkBotMentioned(event, botOpenId, parsedPost?.mentionIds ?? []);
+  const hasAnyMention =
+    (event.message.mentions?.length ?? 0) > 0 || (parsedPost?.mentionIds?.length ?? 0) > 0;
   const content = stripBotMention(rawContent, event.message.mentions);
 
   const ctx: FeishuMessageContext = {
@@ -490,6 +733,7 @@ export function parseFeishuMessageEvent(
     senderOpenId: event.sender.sender_id.open_id || "",
     chatType: event.message.chat_type,
     mentionedBot,
+    hasAnyMention,
     rootId: event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
     content,
@@ -641,8 +885,18 @@ export async function handleFeishuMessage(params: {
       ctx.content,
       cfg,
     );
-    const storeAllowFrom = await core.channel.pairing.readAllowFromStore("feishu").catch(() => []);
-    const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: "feishu",
+    });
+    const hasControlCommand = core.channel.text.hasControlCommand(ctx.content, cfg);
+    const storeAllowFrom =
+      !isGroup && (dmPolicy !== "open" || shouldComputeCommandAuthorized)
+        ? await readFeishuPairingAllowFrom({
+          core,
+          accountId: account.accountId,
+        }).catch(() => [])
+        : []; const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
     const dmAllowed = resolveFeishuAllowlistMatch({
       allowFrom: effectiveDmAllowFrom,
       senderId: ctx.senderOpenId,
@@ -651,10 +905,11 @@ export async function handleFeishuMessage(params: {
 
     if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        const { code, created } = await core.channel.pairing.upsertPairingRequest({
-          channel: "feishu",
-          id: ctx.senderOpenId,
-          meta: { name: ctx.senderName },
+        const { code, created } = await upsertFeishuPairingRequest({
+          core,
+          accountId: account.accountId,
+          senderId: ctx.senderOpenId,
+          senderName: ctx.senderName,
         });
         if (created) {
           log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
@@ -697,7 +952,132 @@ export async function handleFeishuMessage(params: {
         ],
       })
       : undefined;
+    let effectiveWasMentioned = ctx.mentionedBot;
 
+    if (isGroup) {
+      if (groupConfig?.enabled === false) {
+        log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
+        return;
+      }
+
+      const groupPolicy = feishuCfg?.groupPolicy ?? "open";
+      const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
+
+      // Check if this GROUP is allowed (groupAllowFrom contains group IDs like oc_xxx, not user IDs)
+      const groupAllowed = isFeishuGroupAllowed({
+        groupPolicy,
+        allowFrom: groupAllowFrom,
+        senderId: ctx.chatId, // Check group ID, not sender ID
+        senderName: undefined,
+      });
+
+      if (!groupAllowed) {
+        log(`feishu[${account.accountId}]: group ${ctx.chatId} not in groupAllowFrom (groupPolicy=${groupPolicy})`);
+        return;
+      }
+
+      // Additional sender-level allowlist check if group has specific allowFrom config
+      const senderAllowFrom = groupConfig?.allowFrom ?? [];
+      if (senderAllowFrom.length > 0) {
+        const senderAllowed = isFeishuGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: senderAllowFrom,
+          senderId: ctx.senderOpenId,
+          senderName: ctx.senderName,
+        });
+        if (!senderAllowed) {
+          log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
+          return;
+        }
+      }
+
+      const { requireMention, allowMentionlessInMultiBotGroup } = resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        globalConfig: feishuCfg,
+        groupConfig,
+      });
+
+      if (requireMention) {
+        const bypassPolicy = resolveFeishuGroupCommandMentionBypass({
+          globalConfig: feishuCfg,
+          groupConfig,
+        });
+        let bypassAllowedByPolicy = bypassPolicy === "always";
+
+        if (!bypassAllowedByPolicy && bypassPolicy === "single_bot" && hasControlCommand) {
+          const botCount = await resolveFeishuGroupBotCount({
+            account,
+            chatId: ctx.chatId,
+            log,
+          });
+          bypassAllowedByPolicy = botCount !== undefined && botCount <= 1;
+          if (botCount === undefined) {
+            log(
+              `feishu[${account.accountId}]: unable to resolve bot count for ${ctx.chatId}, command mention bypass disabled`,
+            );
+          }
+        }
+
+        const mentionGate = resolveMentionGatingWithBypass({
+          isGroup: true,
+          requireMention,
+          canDetectMention: true,
+          wasMentioned: ctx.mentionedBot,
+          hasAnyMention: ctx.hasAnyMention,
+          allowTextCommands: allowTextCommands && bypassAllowedByPolicy,
+          hasControlCommand,
+          commandAuthorized: commandAuthorized === true,
+        });
+        effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+
+        if (mentionGate.shouldSkip) {
+          skipGroupMessageForMentionGate({
+            accountId: account.accountId,
+            chatId: ctx.chatId,
+            senderOpenId: ctx.senderOpenId,
+            senderName: ctx.senderName,
+            content: ctx.content,
+            messageId: ctx.messageId,
+            historyLimit,
+            chatHistories,
+            log,
+          });
+          return;
+        }
+      } else if (!ctx.mentionedBot && !allowMentionlessInMultiBotGroup) {
+        // Safety default for mention-free mode: only allow non-@ traffic when the group has <= 1 bot.
+        // In multi-bot groups, explicit @ is required unless allowMentionlessInMultiBotGroup=true.
+        const botCount = await resolveFeishuGroupBotCount({
+          account,
+          chatId: ctx.chatId,
+          log,
+        });
+        const singleBotGroup = botCount !== undefined && botCount <= 1;
+        if (!singleBotGroup) {
+          if (botCount === undefined) {
+            log(
+              `feishu[${account.accountId}]: unable to resolve bot_count for ${ctx.chatId}, mention-free mode disabled for safety`,
+            );
+          } else {
+            log(
+              `feishu[${account.accountId}]: group ${ctx.chatId} has ${botCount} bots, explicit @ required unless allowMentionlessInMultiBotGroup=true`,
+            );
+          }
+          skipGroupMessageForMentionGate({
+            accountId: account.accountId,
+            chatId: ctx.chatId,
+            senderOpenId: ctx.senderOpenId,
+            senderName: ctx.senderName,
+            content: ctx.content,
+            messageId: ctx.messageId,
+            historyLimit,
+            chatHistories,
+            log,
+          });
+          return;
+        }
+      }
+    }
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
