@@ -160,7 +160,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
         const hasMedia = mediaUrls.length > 0;
 
-        if (!text.trim() && !hasMedia) {
+        // @ts-ignore
+        if (payload.isReasoning || (!text.trim() && !hasMedia)) {
           return { ok: true } as any;
         }
 
@@ -257,7 +258,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onModelSelected: prefixContext.onModelSelected,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-          if (!payload.text || payload.text === lastPartial) {
+          // @ts-ignore
+          if (payload.isReasoning || !payload.text || payload.text === lastPartial) {
             return;
           }
           lastPartial = payload.text;
