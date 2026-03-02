@@ -105,33 +105,34 @@ function registerEventHandlers(
     "task.task.comment.updated_v1": async (data) => {
       try {
         log(`feishu[${accountId}]: [TaskIntel] task.comment.updated_v1 received`);
-        log(`feishu[${accountId}]: [DEBUG] Raw data: ${JSON.stringify(data).slice(0, 500)}`);
 
-        // Parse the v1 event format
+        // SDK event format is flat (not nested)
         const eventData = data as unknown as {
-          header?: {
-            event_type?: string;
-            app_id?: string;
-            tenant_key?: string;
-          };
-          event?: {
-            task_id?: string;
-            comment_id?: string;
-            parent_id?: string;
-            obj_type?: number; // 1: create, 2: reply, 3: update, 4: delete
-          };
+          event_id?: string;
+          token?: string;
+          create_time?: string;
+          event_type?: string;
+          tenant_key?: string;
+          ts?: string;
+          uuid?: string;
+          type?: string;
+          app_id?: string;
+          task_id?: string;
+          comment_id?: string;
+          parent_id?: string;
+          obj_type?: number; // 1: create, 2: reply, 3: update, 4: delete
         };
 
-        if (!eventData.event?.task_id) {
+        log(`feishu[${accountId}]: [DEBUG] Event data: task_id=${eventData.task_id}, comment_id=${eventData.comment_id}, obj_type=${eventData.obj_type}`);
+
+        if (!eventData.task_id) {
           log(`feishu[${accountId}]: [TaskIntel] No task_id in event, skipping`);
           return;
         }
 
-        // Convert v1 event format to our TaskCommentEvent format
-        // Note: v1 event doesn't include comment content, we need to fetch it
-        const taskGuid = eventData.event.task_id;
-        const commentId = eventData.event.comment_id;
-        const objType = eventData.event.obj_type;
+        const taskGuid = eventData.task_id;
+        const commentId = eventData.comment_id;
+        const objType = eventData.obj_type;
 
         log(`feishu[${accountId}]: [TaskIntel] Task: ${taskGuid}, Comment: ${commentId}, Type: ${objType}`);
 
@@ -141,13 +142,12 @@ function registerEventHandlers(
           return;
         }
 
-        // For v1 API, we need to fetch the comment content via API
-        // For now, create a placeholder event - you'll need to fetch actual content
+        // Build event for handler
         const event: TaskCommentEvent = {
           event: {
             type: "task.task.comment.updated_v1",
-            app_id: eventData.header?.app_id || "",
-            tenant_key: eventData.header?.tenant_key || "",
+            app_id: eventData.app_id || "",
+            tenant_key: eventData.tenant_key || "",
           },
           task: {
             guid: taskGuid,
@@ -161,7 +161,7 @@ function registerEventHandlers(
               id: "",
               type: "",
             },
-            create_time: new Date().toISOString(),
+            create_time: eventData.create_time || new Date().toISOString(),
           },
         };
 
