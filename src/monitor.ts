@@ -100,12 +100,38 @@ function registerEventHandlers(
       }
     },
     // Task comment event - intelligent task completion handling
+    // Try multiple event type formats for task comments
+    "task_v1.task_comment.events.updated": async (data) => {
+      try {
+        const event = data as unknown as TaskCommentEvent;
+        log(`feishu[${accountId}]: [DEBUG] task_v1.task_comment.events.updated received`);
+        log(`feishu[${accountId}]: task comment received on task ${event.task?.guid}`);
+
+        const promise = handleTaskCommentWithLLM({
+          cfg,
+          event,
+          accountId,
+          runtime,
+        });
+
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling task comment: ${String(err)}`);
+          });
+        } else {
+          await promise;
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling task comment event: ${String(err)}`);
+      }
+    },
+    // Alternative event type names (for debugging)
     "task.comment.created_v1": async (data) => {
       try {
         const event = data as unknown as TaskCommentEvent;
+        log(`feishu[${accountId}]: [DEBUG] task.comment.created_v1 received`);
         log(`feishu[${accountId}]: task comment received on task ${event.task?.guid}`);
 
-        // Use fireAndForget pattern for webhook mode to avoid timeout
         const promise = handleTaskCommentWithLLM({
           cfg,
           event,
