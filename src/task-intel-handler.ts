@@ -1,5 +1,6 @@
 /**
- * 智能任务处理系统 - 使用 LLM 分析任务评论并自动更新状态
+ * 智能任务处理系统 - 使用规则分析任务评论并自动更新状态
+ * 无需外部 LLM API，使用关键词规则判断
  */
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 import type { RuntimeEnv, ClawdbotConfig } from "openclaw/plugin-sdk";
@@ -28,7 +29,7 @@ export type TaskCommentEvent = {
   };
 };
 
-// LLM 分析结果
+// 分析结果
 type TaskAnalysisResult = {
   decision: "complete" | "incomplete" | "unclear" | "rejected";
   confidence: number; // 0-1
@@ -48,6 +49,25 @@ type TaskAnalysisResult = {
   };
   reasoning: string;
 };
+
+// 完成关键词（高置信度）
+const COMPLETE_KEYWORDS = [
+  "已完成", "完成了", "搞定", "done", "完成",
+  "已通过", "审核通过", "测试通过", "已上线", "已发布",
+  "已合并", "pr merged", "代码已合并",
+];
+
+// 进行中关键词
+const INCOMPLETE_KEYWORDS = [
+  "未完成", "进行中", "在处理", "待处理",
+  "还有问题", "需要修改", "待完善", "in progress",
+];
+
+// 模糊关键词（低置信度）
+const UNCLEAR_KEYWORDS = [
+  "好了", "ok", "可以了", "行了",
+  "差不多了", "应该可以", "好像完成了",
+];
 
 // 灰度控制配置
 const INTEL_TASK_CONFIG = {
@@ -88,18 +108,13 @@ export async function handleTaskCommentWithLLM(params: {
 
     log(`[TaskIntel] 📊 任务上下文: ${context.comments.length}条评论, ${context.attachments.length}个附件`);
 
-    // 2. 构建 LLM Prompt
-    const prompt = buildAnalysisPrompt({
-      task: context.task,
-      comments: context.comments,
-      attachments: context.attachments,
-      newComment: event.comment,
+    // 2. 使用规则分析评论
+    const analysis = analyzeWithRules({
+      content: event.comment.content,
+      hasAttachments: context.attachments.length > 0,
     });
 
-    // 3. 调用 LLM 分析
-    const analysis = await analyzeWithLLM(prompt, runtime);
-
-    log(`[TaskIntel] 🤖 分析结果: ${analysis.decision}, 置信度: ${analysis.confidence}`);
+    log(`[TaskIntel] 🤖 规则分析结果: ${analysis.decision}, 置信度: ${analysis.confidence}`);
     log(`[TaskIntel] 💭 推理: ${analysis.reasoning}`);
 
     // 4. Dry Run 模式 - 只记录不执行
@@ -170,125 +185,84 @@ async function gatherTaskContext(params: {
 }
 
 /**
- * 构建 LLM 分析 Prompt
+ * 使用规则分析评论（无需 LLM）
  */
-export function buildAnalysisPrompt(params: {
-  task: any;
-  comments: any[];
-  attachments: any[];
-  newComment: TaskCommentEvent["comment"];
-}): string {
-  const { task, comments, attachments, newComment } = params;
+function analyzeWithRules(params: {
+  content: string;
+  hasAttachments: boolean;
+}): TaskAnalysisResult {
+  const { content, hasAttachments } = params;
+  const lowerContent = content.toLowerCase();
 
-  const taskInfo = task ? {
-    title: task.summary ?? "未知",
-    description: task.description ?? "无",
-    status: task.completed_at ? "已完成" : "进行中",
-    due: task.due ? new Date(parseInt(task.due.timestamp)).toISOString() : "未设置",
-    members: task.members?.map((m: any) => m.id).join(", ") ?? "未分配",
-  } : { title: "未知", description: "无", status: "未知", due: "未设置", members: "未分配" };
+  // 1. 检查明确完成关键词
+  const hasCompleteKeyword = COMPLETE_KEYWORDS.some(kw =>
+    lowerContent.includes(kw.toLowerCase())
+  );
+  if (hasCompleteKeyword) {
+    return {
+      decision: "complete",
+      confidence: hasAttachments ? 0.95 : 0.85,
+      actions: {
+        updateStatus: { completed: true, reason: "评论包含明确完成关键词" },
+        replyComment: {
+          content: hasAttachments
+            ? "✅ 检测到完成声明及交付物，任务已自动标记完成"
+            : "✅ 检测到完成声明，任务已自动标记完成",
+          tone: "friendly",
+        },
+      },
+      reasoning: `评论包含完成关键词，${hasAttachments ? "且有附件" : ""}置信度高`,
+    };
+  }
 
-  const recentComments = comments
-    .slice(-5)
-    .map((c: any, i: number) => `${i + 1}. [${c.creator?.id ?? "unknown"}] ${c.content?.slice(0, 100) ?? ""}`)
-    .join("\n");
+  // 2. 检查进行中关键词
+  const hasIncompleteKeyword = INCOMPLETE_KEYWORDS.some(kw =>
+    lowerContent.includes(kw.toLowerCase())
+  );
+  if (hasIncompleteKeyword) {
+    return {
+      decision: "incomplete",
+      confidence: 0.8,
+      actions: {
+        replyComment: {
+          content: "📝 收到，任务仍在进行中，请继续加油！",
+          tone: "friendly",
+        },
+      },
+      reasoning: "评论包含进行中关键词",
+    };
+  }
 
-  const attachmentList = attachments
-    .map((a: any) => `- ${a.name ?? "未命名"} (${((a.size ?? 0) / 1024).toFixed(1)} KB)`)
-    .join("\n") || "无";
+  // 3. 检查模糊关键词
+  const hasUnclearKeyword = UNCLEAR_KEYWORDS.some(kw =>
+    lowerContent.includes(kw.toLowerCase())
+  );
+  if (hasUnclearKeyword) {
+    return {
+      decision: "unclear",
+      confidence: 0.5,
+      actions: {
+        replyComment: {
+          content: "🤔 请明确说明是否已完成，例如：\n- '功能已完成，代码已合并'\n- '测试通过，可以上线'",
+          tone: "friendly",
+        },
+      },
+      reasoning: "评论较模糊，需要明确确认",
+    };
+  }
 
-  return `你是一个任务管理助手，需要判断用户评论是否表示任务真实完成。
-
-## 任务信息
-- 标题: ${taskInfo.title}
-- 描述: ${taskInfo.description}
-- 当前状态: ${taskInfo.status}
-- 截止时间: ${taskInfo.due}
-- 负责人: ${taskInfo.members}
-
-## 历史评论 (${comments.length}条，显示最近5条)
-${recentComments || "无"}
-
-## 附件 (${attachments.length}个)
-${attachmentList}
-
-## 新评论
-评论者ID: ${newComment.creator.id}
-内容: "${newComment.content}"
-时间: ${newComment.create_time}
-
-## 判断标准
-1. "完成"必须包含实质性的完成证据或明确声明
-2. 模糊的"好了"、"ok"不算完成
-3. 如果提到"部分完成"、"进行中"不算完成
-4. 如果有截止时间，检查是否超时
-5. 如果有附件，可能是交付物
-
-## 请输出 JSON
-
-输出格式：
-{
-  "decision": "complete" | "incomplete" | "unclear" | "rejected",
-  "confidence": 0.0-1.0,
-  "actions": {
-    "updateStatus": {
-      "completed": true/false,
-      "reason": "为什么更新这个状态"
+  // 4. 默认情况
+  return {
+    decision: "unclear",
+    confidence: 0.4,
+    actions: {
+      replyComment: {
+        content: "💡 请说明任务状态：\n- 完成：请描述完成内容\n- 未完成：请说明进度",
+        tone: "friendly",
+      },
     },
-    "replyComment": {
-      "content": "回复给用户的话（简洁友好）",
-      "tone": "friendly" | "formal" | "urgent"
-    }
-  },
-  "reasoning": "你的思考过程（一句话）"
-}
-
-只输出 JSON，不要其他内容。`;
-}
-
-/**
- * 调用 LLM 分析
- */
-async function analyzeWithLLM(prompt: string, runtime?: RuntimeEnv): Promise<TaskAnalysisResult> {
-  const log = runtime?.log ?? console.log;
-
-  // 获取 API Key
-  const apiKey = process.env.CLAUDE_API_KEY;
-  if (!apiKey) {
-    throw new Error("未设置 CLAUDE_API_KEY 环境变量");
-  }
-
-  log(`[TaskIntel] 🌐 调用 LLM 分析，Prompt 长度: ${prompt.length}`);
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM API 错误: ${response.status} ${errorText}`);
-  }
-
-  const data = await response.json();
-  const content = data.content?.[0]?.text ?? "";
-
-  // 提取 JSON
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`LLM 返回格式错误: ${content.slice(0, 200)}`);
-  }
-
-  return JSON.parse(jsonMatch[0]) as TaskAnalysisResult;
+    reasoning: "未识别到明确的状态关键词",
+  };
 }
 
 /**
