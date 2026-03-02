@@ -100,37 +100,70 @@ function registerEventHandlers(
       }
     },
     // Task comment event - intelligent task completion handling
-    // Try multiple event type formats for task comments
-    "task_v1.task_comment.events.updated": async (data) => {
+    // IMPORTANT: This event only fires for tasks created by THIS APP
+    // Event type: task.task.comment.updated_v1 (from Feishu Task v1 API)
+    "task.task.comment.updated_v1": async (data) => {
       try {
-        const event = data as unknown as TaskCommentEvent;
-        log(`feishu[${accountId}]: [DEBUG] task_v1.task_comment.events.updated received`);
-        log(`feishu[${accountId}]: task comment received on task ${event.task?.guid}`);
+        log(`feishu[${accountId}]: [TaskIntel] task.comment.updated_v1 received`);
+        log(`feishu[${accountId}]: [DEBUG] Raw data: ${JSON.stringify(data).slice(0, 500)}`);
 
-        const promise = handleTaskCommentWithLLM({
-          cfg,
-          event,
-          accountId,
-          runtime,
-        });
+        // Parse the v1 event format
+        const eventData = data as unknown as {
+          header?: {
+            event_type?: string;
+            app_id?: string;
+            tenant_key?: string;
+          };
+          event?: {
+            task_id?: string;
+            comment_id?: string;
+            parent_id?: string;
+            obj_type?: number; // 1: create, 2: reply, 3: update, 4: delete
+          };
+        };
 
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling task comment: ${String(err)}`);
-          });
-        } else {
-          await promise;
+        if (!eventData.event?.task_id) {
+          log(`feishu[${accountId}]: [TaskIntel] No task_id in event, skipping`);
+          return;
         }
-      } catch (err) {
-        error(`feishu[${accountId}]: error handling task comment event: ${String(err)}`);
-      }
-    },
-    // Alternative event type names (for debugging)
-    "task.comment.created_v1": async (data) => {
-      try {
-        const event = data as unknown as TaskCommentEvent;
-        log(`feishu[${accountId}]: [DEBUG] task.comment.created_v1 received`);
-        log(`feishu[${accountId}]: task comment received on task ${event.task?.guid}`);
+
+        // Convert v1 event format to our TaskCommentEvent format
+        // Note: v1 event doesn't include comment content, we need to fetch it
+        const taskGuid = eventData.event.task_id;
+        const commentId = eventData.event.comment_id;
+        const objType = eventData.event.obj_type;
+
+        log(`feishu[${accountId}]: [TaskIntel] Task: ${taskGuid}, Comment: ${commentId}, Type: ${objType}`);
+
+        // Only process create(1) and reply(2) events
+        if (objType !== 1 && objType !== 2) {
+          log(`feishu[${accountId}]: [TaskIntel] Skipping non-create event type: ${objType}`);
+          return;
+        }
+
+        // For v1 API, we need to fetch the comment content via API
+        // For now, create a placeholder event - you'll need to fetch actual content
+        const event: TaskCommentEvent = {
+          event: {
+            type: "task.task.comment.updated_v1",
+            app_id: eventData.header?.app_id || "",
+            tenant_key: eventData.header?.tenant_key || "",
+          },
+          task: {
+            guid: taskGuid,
+            task_id: taskGuid,
+            summary: "",
+          },
+          comment: {
+            comment_id: commentId || "",
+            content: "", // v1 event doesn't include content, need to fetch separately
+            creator: {
+              id: "",
+              type: "",
+            },
+            create_time: new Date().toISOString(),
+          },
+        };
 
         const promise = handleTaskCommentWithLLM({
           cfg,
