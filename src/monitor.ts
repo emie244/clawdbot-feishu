@@ -6,11 +6,12 @@ import {
   type HistoryEntry,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk";
-import type { ResolvedFeishuAccount } from "./types.js";
+import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { probeFeishu } from "./probe.js";
+import { handleTaskCommentWithLLM, type TaskCommentEvent } from "./task-intel-handler.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -96,6 +97,31 @@ function registerEventHandlers(
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+      }
+    },
+    // Task comment event - intelligent task completion handling
+    "task.comment.created_v1": async (data) => {
+      try {
+        const event = data as unknown as TaskCommentEvent;
+        log(`feishu[${accountId}]: task comment received on task ${event.task?.guid}`);
+
+        // Use fireAndForget pattern for webhook mode to avoid timeout
+        const promise = handleTaskCommentWithLLM({
+          cfg,
+          event,
+          accountId,
+          runtime,
+        });
+
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling task comment: ${String(err)}`);
+          });
+        } else {
+          await promise;
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling task comment event: ${String(err)}`);
       }
     },
   });
