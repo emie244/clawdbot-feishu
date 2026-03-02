@@ -103,6 +103,9 @@ function registerEventHandlers(
     "*": async (data) => {
       const eventType = (data as any)?.event_type || (data as any)?.type || "unknown";
 
+      // Debug: log all events to verify event flow
+      log(`feishu[${accountId}]: [DEBUG *] Event received: ${eventType}`);
+
       // Handle task comment events via wildcard (SDK may not route specific event types properly)
       if (eventType === "task.task.comment.updated_v1" || eventType === "task.comment.updated_v1") {
         log(`feishu[${accountId}]: [TaskIntel] ${eventType} received via wildcard`);
