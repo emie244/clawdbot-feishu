@@ -195,12 +195,13 @@ function registerEventHandlers(
     },
     // Task comment event - intelligent task completion handling
     // IMPORTANT: This event only fires for tasks created by THIS APP
-    // Note: The wildcard handler above actually processes this event, this is kept as fallback
-    "task.task.comment.updated_v1": async (data) => {
+    // Note: The wildcard handler above actually processes this event, these are kept as fallback
+    "task.task.comment.updated_v1": async () => {
       // This handler may not be called by the SDK, processing happens in wildcard handler
       // Keeping this registration to suppress SDK warnings
-      log(`feishu[${accountId}]: [TaskIntel] task.comment.updated_v1 handler called (direct)`);
     },
+    // Alternative event type names to suppress SDK warnings
+    "task.comment.updated_v1": async () => {},
   });
 }
 
