@@ -99,6 +99,14 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
     },
+    // Debug: log all events to see what we're receiving
+    "*": async (data) => {
+      const eventType = (data as any)?.event_type || (data as any)?.type || "unknown";
+      if (eventType.includes("task") || eventType.includes("comment")) {
+        log(`feishu[${accountId}]: [DEBUG ALL] Event received: ${eventType}`);
+        log(`feishu[${accountId}]: [DEBUG ALL] Data keys: ${Object.keys(data as any).join(", ")}`);
+      }
+    },
     // Task comment event - intelligent task completion handling
     // IMPORTANT: This event only fires for tasks created by THIS APP
     // Event type: task.task.comment.updated_v1 (from Feishu Task v1 API)
