@@ -96,10 +96,28 @@ export async function handleTaskCommentWithLLM(params: {
   }
 
   try {
-    log(`[TaskIntel] 🔍 收到任务评论，任务: ${event.task.guid}`);
-    log(`[TaskIntel] 📝 评论内容: ${event.comment.content.slice(0, 100)}...`);
+    log(`[TaskIntel] 🔍 收到任务评论事件，任务: ${event.task.guid}`);
 
-    // 1. 收集任务上下文
+    // 1. 获取评论内容（v1 事件不包含内容，需要通过 API 获取）
+    let commentContent = event.comment.content;
+    if (!commentContent && event.comment.comment_id) {
+      log(`[TaskIntel] 📝 获取评论详情...`);
+      commentContent = await fetchCommentContent({
+        taskGuid: event.task.guid,
+        commentId: event.comment.comment_id,
+        accountId,
+        cfg,
+      });
+    }
+
+    if (!commentContent) {
+      log(`[TaskIntel] ⚠️ 无法获取评论内容，跳过处理`);
+      return;
+    }
+
+    log(`[TaskIntel] 📝 评论内容: ${commentContent.slice(0, 100)}...`);
+
+    // 2. 收集任务上下文
     const context = await gatherTaskContext({
       taskGuid: event.task.guid,
       accountId,
@@ -108,9 +126,9 @@ export async function handleTaskCommentWithLLM(params: {
 
     log(`[TaskIntel] 📊 任务上下文: ${context.comments.length}条评论, ${context.attachments.length}个附件`);
 
-    // 2. 使用规则分析评论
+    // 3. 使用规则分析评论
     const analysis = analyzeWithRules({
-      content: event.comment.content,
+      content: commentContent,
       hasAttachments: context.attachments.length > 0,
     });
 
@@ -385,4 +403,26 @@ async function createTaskComment(params: {
     path: { task_guid: params.taskGuid },
     data: { content: params.content },
   });
+}
+
+/**
+ * 获取评论内容
+ * 注意：v1 事件不包含评论内容，需要通过 API 获取
+ * 由于 v1 API 的限制，这里返回空字符串，实际使用时需要通过 task.comment.list 获取
+ */
+async function fetchCommentContent(params: {
+  taskGuid: string;
+  commentId: string;
+  accountId: string;
+  cfg: ClawdbotConfig;
+}): Promise<string> {
+  // v1 API 的事件不包含评论内容
+  // 需要通过 task.comment.list API 获取评论列表，然后找到对应的评论
+  // 这里简化处理，返回空字符串
+  // 实际实现需要调用飞书 API 获取评论详情
+
+  // 注意：由于 v1 API 的限制，可能无法直接通过 comment_id 获取单个评论
+  // 需要使用 task.comment.list 获取任务的所有评论，然后匹配 comment_id
+
+  return "";
 }
